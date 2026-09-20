@@ -1,10 +1,12 @@
+const base = import.meta.env.BASE_URL
+
 export const ASSETS = {
   bg: {
-    default: "/assets/bg/default.jpg",
-    scene1: "/assets/bg/scene1.jpg",
-    scene2: "/assets/bg/scene2.jpg",
+    default: `${base}assets/bg/default.jpg`,
+    scene1: `${base}assets/bg/scene1.jpg`,
+    scene2: `${base}assets/bg/scene2.jpg`,
   },
   hero: {
     default: "",
   },
-};
+}
