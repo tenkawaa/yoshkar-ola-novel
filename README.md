@@ -1,5 +1,56 @@
-# Vue 3 + Vite
+# Йошкар-Ола — интерактивный путеводитель
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Небольшой веб-проект в формате визуальной новеллы для виртуальной прогулки по Йошкар-Оле. Игрок проходит по сценарию, читает диалоги и выбирает варианты маршрута.
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## Что внутри
+
+- **Сценарий с выбором ответа:** Ветвление диалогов, переходы между локациями и персонажами.
+- **Печатающийся текст:** Эффект постепенного вывода реплик с возможностью пропустить анимацию кликом или клавишей `Enter`.
+- **Управление:** Игра полностью проходима как мышкой/тапом, так и с клавиатуры (`Enter`).
+- **Адаптивный интерфейс:** Нормально отображается на ПК и телефонах.
+
+## Стек
+
+- **Vue 3** (Composition API, `<script setup>`)
+- **Vite** (сборка и dev-сервер)
+- **Tailwind CSS** (стили)
+
+## Запуск проекта
+
+Для работы потребуется Node.js (версии 18 или новее).
+
+1. Клонировать репозиторий:
+   ```bash
+   git clone https://github.com/your-username/yoshkar-ola-novel.git
+   cd yoshkar-ola-novel
+   ```
+
+2. Установить зависимости:
+   ```bash
+   npm install
+   ```
+
+3. Запустить в режиме разработки:
+   ```bash
+   npm run dev
+   ```
+
+4. Собрать production-версию:
+   ```bash
+   npm run build
+   ```
+
+## Как редактировать сценарий
+
+Весь текст, списки выборов и привязка спрайтов/фонов лежат в `src/config/scenario.js`. 
+
+Каждая сцена представляет собой объект:
+```javascript
+my_scene: {
+  speaker: 'Имя персонажа',
+  bgKey: 'название_фона_из_assets',
+  characterKey: 'название_персонажа_из_assets',
+  text: 'Текст реплики...',
+  nextId: 'следующая_сцена' // или choices: [...] для вариантов ответа
+}
+```
