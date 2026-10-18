@@ -1,9 +1,26 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Lora", ui-serif, Georgia, serif;
+
+  /* Цвета флага Марий Эл и вышивки */
+  --color-mari-red: #9e1b1b;
+  --color-mari-red-light: #c8372d;
+  --color-mari-blue: #1f5aa6;
+  --color-cream: #fbf3e4;
+}
+
 html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
   width: 100%;
   height: 100%;
+}
+
+/* Полоска марийского орнамента: ромбы с «рожками» */
+.ornament-strip {
+  height: 8px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='8' viewBox='0 0 24 8'%3E%3Cpath d='M12 0l4 4-4 4-4-4z' fill='%23c8372d'/%3E%3Cpath d='M12 2.5l1.5 1.5-1.5 1.5-1.5-1.5z' fill='%23fbf3e4'/%3E%3Crect x='3' y='3.25' width='3' height='1.5' fill='%23fbf3e4'/%3E%3Crect x='18' y='3.25' width='3' height='1.5' fill='%23fbf3e4'/%3E%3C/svg%3E") repeat-x center;
 }

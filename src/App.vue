@@ -1,7 +1,10 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { ASSETS } from './config/assets.js'
-import { SCENARIO } from './config/scenario.js'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ASSETS, CREDITS } from './config/assets.js'
+import { SCENARIO, ROUTE, QUESTIONS } from './config/scenario.js'
+import { validateScenario } from './engine/validate.js'
+
+if (import.meta.env.DEV) validateScenario(SCENARIO, ASSETS, ROUTE)
 
 const isStart = ref(true)
 const showEndScreen = ref(false)
@@ -9,51 +12,102 @@ const showEndScreen = ref(false)
 const currentSceneId = ref('start')
 const currentScene = computed(() => SCENARIO[currentSceneId.value])
 
-const currentBgUrl = computed(() => ASSETS.bg[currentScene.value?.bgKey] || '')
-const currentCharUrl = computed(() => ASSETS.characters[currentScene.value?.characterKey] || null)
+// Переменные прохождения: очки викторины, флаги выборов
+const vars = reactive({})
 
+// Фон, персонаж и точка маршрута наследуются от предыдущей сцены, если не заданы
+const bgKey = ref(null)
+const characterKey = ref(null)
+const stopId = ref(null)
+
+const currentBgUrl = computed(() => ASSETS.bg[bgKey.value] || '')
+const currentCharUrl = computed(() => {
+  const sprites = ASSETS.characters[characterKey.value]
+  if (!sprites) return null
+  return sprites[currentScene.value?.emotion] || sprites.neutral
+})
+const stopIndex = computed(() => ROUTE.findIndex((s) => s.id === stopId.value))
+const isNarration = computed(() => !currentScene.value?.speaker)
+
+const resolve = (value) => (typeof value === 'function' ? value(vars) : value)
+
+function applyScene(scene) {
+  if (scene.bgKey !== undefined) bgKey.value = scene.bgKey
+  if (scene.characterKey !== undefined) characterKey.value = scene.characterKey
+  if (scene.stop !== undefined) stopId.value = scene.stop
+}
+
+const fullText = ref('')
 const displayedText = ref('')
 const isTyping = ref(false)
 let typingInterval = null
 
-function startTypewriter(fullText) {
+function startTypewriter(text) {
   clearInterval(typingInterval)
+  fullText.value = text
   displayedText.value = ''
   isTyping.value = true
 
   let index = 0
   typingInterval = setInterval(() => {
-    if (index < fullText.length) {
-      displayedText.value += fullText.charAt(index)
+    if (index < text.length) {
+      displayedText.value += text.charAt(index)
       index++
     } else {
-      completeTyping(fullText)
+      completeTyping()
     }
   }, 25)
 }
 
-function completeTyping(fullText) {
+function completeTyping() {
   clearInterval(typingInterval)
-  displayedText.value = fullText
+  displayedText.value = fullText.value
   isTyping.value = false
 }
 
-watch(currentSceneId, () => {
-  if (!isStart.value && currentScene.value?.text) {
-    startTypewriter(currentScene.value.text)
-  }
-})
-
-function startGame() {
-  isStart.value = false
-  showEndScreen.value = false
-  currentSceneId.value = 'start'
-  if (currentScene.value?.text) {
-    startTypewriter(currentScene.value.text)
+// Подгружаем картинки следующих сцен заранее, чтобы фон не мигал при переходе
+const preloaded = new Set()
+function preload(url) {
+  if (!url || preloaded.has(url)) return
+  preloaded.add(url)
+  new Image().src = url
+}
+function preloadNext(scene) {
+  const ids = [scene.nextId, ...(scene.choices || []).map((c) => c.nextId)]
+  for (const id of ids) {
+    const next = typeof id === 'string' ? SCENARIO[id] : null
+    if (!next) continue
+    preload(ASSETS.bg[next.bgKey])
+    const sprites = ASSETS.characters[next.characterKey ?? characterKey.value]
+    if (sprites) preload(sprites[next.emotion] || sprites.neutral)
   }
 }
 
+watch(currentSceneId, () => {
+  if (isStart.value) return
+  enterScene()
+})
+
+function enterScene() {
+  const scene = currentScene.value
+  if (!scene) return
+  applyScene(scene)
+  startTypewriter(resolve(scene.text) || '')
+  preloadNext(scene)
+}
+
+function startGame() {
+  for (const key of Object.keys(vars)) delete vars[key]
+  vars.score = 0
+  bgKey.value = characterKey.value = stopId.value = null
+  isStart.value = false
+  showEndScreen.value = false
+  if (currentSceneId.value === 'start') enterScene()
+  else currentSceneId.value = 'start'
+}
+
 function goToStartMenu() {
+  clearInterval(typingInterval)
   showEndScreen.value = false
   isStart.value = true
   currentSceneId.value = 'start'
@@ -66,13 +120,19 @@ function goToScene(sceneId) {
   }
 }
 
+function choose(choice) {
+  for (const [key, value] of Object.entries(choice.add || {})) vars[key] = (vars[key] || 0) + value
+  Object.assign(vars, choice.set || {})
+  goToScene(resolve(choice.nextId))
+}
+
+const visibleChoices = computed(() => (!isTyping.value && currentScene.value?.choices) || [])
+
 function handleScreenClick() {
   if (isStart.value || showEndScreen.value) return
 
-  const fullText = currentScene.value?.text || ''
-
   if (isTyping.value) {
-    completeTyping(fullText)
+    completeTyping()
     return
   }
 
@@ -81,27 +141,31 @@ function handleScreenClick() {
     return
   }
 
-  if (currentScene.value?.nextId && (!currentScene.value.choices || currentScene.value.choices.length === 0)) {
-    goToScene(currentScene.value.nextId)
+  if (currentScene.value?.nextId && !currentScene.value.choices?.length) {
+    goToScene(resolve(currentScene.value.nextId))
   }
 }
 
 function handleKeydown(event) {
-  if (event.key === 'Enter') {
-    if (isStart.value) {
-      startGame()
-      return
-    }
-    if (showEndScreen.value) {
-      goToStartMenu()
-      return
-    }
-    handleScreenClick()
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    if (isStart.value) return startGame()
+    if (showEndScreen.value) return goToStartMenu()
+    return handleScreenClick()
   }
+
+  if (isStart.value || showEndScreen.value) return
+  const choice = visibleChoices.value[Number(event.key) - 1]
+  if (choice) choose(choice)
 }
+
+const ending = computed(() => currentScene.value?.ending)
+const menuBg = ASSETS.bg.menu
+const menuCat = ASSETS.characters.cat.happy
 
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
+  preload(ASSETS.bg[SCENARIO.start.bgKey])
 })
 
 onUnmounted(() => {
@@ -112,47 +176,70 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="relative w-screen h-screen bg-slate-950 select-none overflow-hidden cursor-pointer font-sans"
+    class="relative w-screen h-dvh bg-slate-950 select-none overflow-hidden cursor-pointer font-sans"
     @click="handleScreenClick"
   >
     <Transition name="fade-overlay">
       <div
         v-if="isStart"
-        class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center"
+        class="absolute inset-0 z-50 flex flex-col items-center justify-center text-white p-6 text-center bg-cover bg-center"
+        :style="{ backgroundImage: `url(${menuBg})` }"
       >
-        <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight mb-4 text-amber-500 drop-shadow-[0_0_15px_rgba(245,158,11,0.3)]">
-          Йошкар-Ола
-        </h1>
-        <p class="text-lg md:text-xl text-gray-300 max-w-md mb-8 leading-relaxed">
-          Интерактивная карта. Отправься в виртуальную прогулку по главным достопримечательностям города!
-        </p>
-        <button
-          @click.stop="startGame"
-          class="px-8 py-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-lg rounded-2xl shadow-lg hover:shadow-amber-500/40 transition-all duration-300 active:scale-95 cursor-pointer"
-        >
-          Начать игру
-        </button>
+        <div class="absolute inset-0 bg-gradient-to-b from-slate-950/60 via-slate-950/70 to-slate-950/95"></div>
+
+        <div class="relative flex flex-col items-center">
+          <img :src="menuCat" alt="" class="h-40 md:h-52 mb-2 drop-shadow-[0_10px_10px_rgba(0,0,0,0.5)]" />
+          <h1 class="font-display text-5xl md:text-7xl font-bold tracking-tight mb-2 text-cream drop-shadow-lg">
+            Йошкар-Ола
+          </h1>
+          <div class="ornament-strip w-48 mb-5"></div>
+          <p class="text-lg md:text-xl text-gray-200 max-w-md mb-8 leading-relaxed">
+            Прогулка с Йошкиным котом по главным местам столицы Марий Эл
+          </p>
+          <button
+            @click.stop="startGame"
+            class="px-8 py-4 bg-mari-red hover:bg-mari-red-light text-cream font-bold text-lg rounded-2xl shadow-lg shadow-black/40 transition-all duration-300 active:scale-95 cursor-pointer"
+          >
+            Начать прогулку
+          </button>
+          <p class="mt-6 text-sm text-gray-400">Клик или Enter — дальше · 1, 2, 3 — выбор ответа</p>
+        </div>
       </div>
     </Transition>
 
     <Transition name="fade-overlay">
       <div
         v-if="showEndScreen && !isStart"
-        class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md text-white p-6 text-center"
+        class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/90 backdrop-blur-md text-white p-6 text-center overflow-y-auto cursor-default"
+        @click.stop
       >
-        <div class="text-6xl mb-4 animate-bounce">🏆</div>
-        <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4 text-amber-500 drop-shadow-[0_0_15px_rgba(245,158,11,0.3)]">
-          Вы прошли новеллу!
+        <img :src="menuCat" alt="" class="h-32 mb-3" />
+        <div class="text-sm uppercase tracking-[0.2em] text-gray-400 mb-2">Концовка</div>
+        <h2 class="font-display text-4xl md:text-5xl font-bold tracking-tight mb-3 text-cream">
+          {{ ending?.title || 'Прогулка окончена' }}
         </h2>
-        <p class="text-lg md:text-xl text-gray-300 max-w-md mb-8 leading-relaxed">
-          Спасибо за прогулку по Йошкар-Оле! Надеемся, вам понравилось наше виртуальное путешествие.
+        <div class="ornament-strip w-48 mb-5"></div>
+        <p class="text-lg md:text-xl text-gray-300 max-w-md mb-2 leading-relaxed">
+          {{ ending?.text || 'Спасибо за прогулку по Йошкар-Оле!' }}
         </p>
+        <p class="text-amber-300 font-semibold mb-8">Верных ответов: {{ vars.score }} из {{ QUESTIONS }}</p>
         <button
           @click.stop="goToStartMenu"
-          class="px-8 py-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-lg rounded-2xl shadow-lg hover:shadow-amber-500/40 transition-all duration-300 active:scale-95 cursor-pointer"
+          class="px-8 py-4 bg-mari-red hover:bg-mari-red-light text-cream font-bold text-lg rounded-2xl shadow-lg shadow-black/40 transition-all duration-300 active:scale-95 cursor-pointer"
         >
           Пройти заново
         </button>
+
+        <details class="mt-8 max-w-xl text-left text-xs text-gray-400">
+          <summary class="cursor-pointer text-center">Источники фотографий</summary>
+          <ul class="mt-3 space-y-1">
+            <li v-for="c in CREDITS" :key="c.url">
+              {{ c.what }} — {{ c.author }},
+              <a :href="c.url" target="_blank" rel="noopener" class="underline hover:text-white">{{ c.license }}</a>,
+              Wikimedia Commons
+            </li>
+          </ul>
+        </details>
       </div>
     </Transition>
 
@@ -160,28 +247,47 @@ onUnmounted(() => {
       <div
         v-if="!isStart"
         :key="currentBgUrl"
-        class="absolute inset-0 bg-cover bg-center transition-all duration-700"
+        class="absolute inset-0 bg-cover bg-center"
         :style="{ backgroundImage: currentBgUrl ? `url(${currentBgUrl})` : 'none' }"
       />
     </Transition>
 
+    <div
+      v-if="!isStart && stopIndex >= 0"
+      class="absolute top-4 left-4 z-30 max-w-[70%] px-4 py-2.5 bg-black/60 text-white rounded-xl border border-white/20 backdrop-blur"
+    >
+      <div class="text-sm md:text-base font-semibold leading-tight">📍 {{ ROUTE[stopIndex].title }}</div>
+      <div class="mt-1.5 flex gap-1.5">
+        <span
+          v-for="(stop, i) in ROUTE"
+          :key="stop.id"
+          :title="stop.title"
+          class="h-1.5 w-6 rounded-full transition-colors duration-500"
+          :class="i <= stopIndex ? 'bg-mari-red-light' : 'bg-white/25'"
+        ></span>
+      </div>
+    </div>
+
     <button
       v-if="!isStart"
       @click.stop="goToStartMenu"
-      class="absolute top-4 right-4 z-30 px-2 py-2 bg-black/60 hover:bg-black/80 text-white rounded-xl border border-white/20 backdrop-blur transition-all duration-200 active:scale-95 cursor-pointer"
+      title="В меню"
+      class="absolute top-4 right-4 z-30 p-2.5 bg-black/60 hover:bg-black/80 text-cream rounded-xl border border-white/20 backdrop-blur transition-all duration-200 active:scale-95 cursor-pointer"
     >
-      <img src="/assets/home.svg" class="size-8 stroke-amber-500">
+      <svg viewBox="0 0 16 16" class="size-7" fill="currentColor" aria-hidden="true">
+        <path d="M1 6V15H6V11C6 9.89543 6.89543 9 8 9C9.10457 9 10 9.89543 10 11V15H15V6L8 0L1 6Z" />
+      </svg>
     </button>
 
     <Transition name="fade-char">
       <div
         v-if="!isStart && currentCharUrl"
-        :key="currentCharUrl"
-        class="absolute bottom-0 left-1/2 -translate-x-1/2 h-[65vh] pointer-events-none z-10 flex items-end"
+        :key="characterKey"
+        class="absolute bottom-0 right-[6%] h-[62vh] w-max pointer-events-none z-10 hidden md:flex items-end"
       >
         <img
           :src="currentCharUrl"
-          alt="Character"
+          alt=""
           class="h-full object-contain drop-shadow-[0_10px_10px_rgba(0,0,0,0.6)]"
         />
       </div>
@@ -189,27 +295,46 @@ onUnmounted(() => {
 
     <div
       v-if="!isStart"
-      class="absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-4xl bg-black/85 backdrop-blur-md border border-white/15 rounded-2xl p-6 text-white z-20 shadow-2xl"
+      class="absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-4xl bg-black/85 backdrop-blur-md border border-white/15 rounded-2xl p-6 pt-7 text-white z-20 shadow-2xl"
     >
-      <div class="text-amber-600 font-bold text-lg mb-1 tracking-wide">
+      <div class="ornament-strip absolute top-0 inset-x-6 opacity-80"></div>
+
+      <!-- На телефоне персонаж сидит прямо на окне диалога, чтобы его не перекрывал текст -->
+      <Transition name="fade-char">
+        <img
+          v-if="currentCharUrl"
+          :key="characterKey"
+          :src="currentCharUrl"
+          alt=""
+          class="md:hidden absolute bottom-full right-3 h-[26vh] pointer-events-none drop-shadow-[0_6px_6px_rgba(0,0,0,0.5)]"
+        />
+      </Transition>
+
+      <div
+        v-if="!isNarration"
+        class="absolute -top-4 left-6 px-4 py-1 bg-mari-red text-cream font-bold rounded-lg shadow-md tracking-wide"
+      >
         {{ currentScene?.speaker }}
       </div>
 
-      <div class="text-base md:text-lg leading-relaxed text-gray-100 min-h-[4rem]">
+      <div
+        class="text-base md:text-lg leading-relaxed min-h-16"
+        :class="isNarration ? 'italic text-gray-300' : 'text-gray-100'"
+      >
         {{ displayedText }}
-        <span v-if="isTyping" class="inline-block w-2 h-5 bg-amber-500 ml-1 animate-pulse align-middle"></span>
+        <span v-if="isTyping" class="inline-block w-2 h-5 bg-mari-red-light ml-1 animate-pulse align-middle"></span>
       </div>
 
-      <div
-        v-if="currentScene?.choices?.length && !isTyping"
-        class="mt-4 flex flex-col gap-2"
-      >
+      <div v-if="visibleChoices.length" class="mt-4 flex flex-col gap-2">
         <button
-          v-for="(choice, index) in currentScene.choices"
+          v-for="(choice, index) in visibleChoices"
           :key="index"
-          @click.stop="goToScene(choice.nextId)"
-          class="w-full text-left p-3.5 rounded-xl bg-white/10 hover:bg-amber-500 hover:text-slate-950 border border-white/10 font-medium transition-all duration-200 active:scale-[0.99] cursor-pointer"
+          @click.stop="choose(choice)"
+          class="group w-full flex items-center gap-3 text-left p-3.5 rounded-xl bg-white/10 hover:bg-cream hover:text-slate-950 border border-white/10 font-medium transition-all duration-200 active:scale-[0.99] cursor-pointer"
         >
+          <span class="hidden md:inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-white/15 group-hover:bg-mari-red group-hover:text-cream text-xs font-bold">
+            {{ index + 1 }}
+          </span>
           {{ choice.text }}
         </button>
       </div>
@@ -233,5 +358,5 @@ onUnmounted(() => {
 .fade-bg-enter-from, .fade-bg-leave-to { opacity: 0; }
 
 .fade-char-enter-active, .fade-char-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
-.fade-char-enter-from, .fade-char-leave-to { opacity: 0; transform: translate(-50%, 10px); }
+.fade-char-enter-from, .fade-char-leave-to { opacity: 0; transform: translateY(10px); }
 </style>
